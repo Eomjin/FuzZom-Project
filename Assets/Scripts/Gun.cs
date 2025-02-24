@@ -1,9 +1,8 @@
 ﻿using System.Collections;
-using Photon.Pun;
 using UnityEngine;
 
 // 총을 구현한다
-public class Gun : MonoBehaviourPun, IPunObservable {
+public class Gun : MonoBehaviour {
     // 총의 상태를 표현하는데 사용할 타입을 선언한다
     public enum State {
         Ready, // 발사 준비됨
@@ -31,39 +30,11 @@ public class Gun : MonoBehaviourPun, IPunObservable {
     public int magCapacity = 25; // 탄창 용량
     public int magAmmo; // 현재 탄창에 남아있는 탄약
 
+
     public float timeBetFire = 0.12f; // 총알 발사 간격
     public float reloadTime = 1.8f; // 재장전 소요 시간
     private float lastFireTime; // 총을 마지막으로 발사한 시점
 
-    // 주기적으로 자동 실행되는, 동기화 메서드
-    public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info) {
-        // 로컬 오브젝트라면 쓰기 부분이 실행됨
-        if (stream.IsWriting)
-        {
-            // 남은 탄약수를 네트워크를 통해 보내기
-            stream.SendNext(ammoRemain);
-            // 탄창의 탄약수를 네트워크를 통해 보내기
-            stream.SendNext(magAmmo);
-            // 현재 총의 상태를 네트워크를 통해 보내기
-            stream.SendNext(state);
-        }
-        else
-        {
-            // 리모트 오브젝트라면 읽기 부분이 실행됨
-            // 남은 탄약수를 네트워크를 통해 받기
-            ammoRemain = (int) stream.ReceiveNext();
-            // 탄창의 탄약수를 네트워크를 통해 받기
-            magAmmo = (int) stream.ReceiveNext();
-            // 현재 총의 상태를 네트워크를 통해 받기
-            state = (State) stream.ReceiveNext();
-        }
-    }
-
-    // 남은 탄약을 추가하는 메서드
-    [PunRPC]
-    public void AddAmmo(int ammo) {
-        ammoRemain += ammo;
-    }
 
     private void Awake() {
         // 사용할 컴포넌트들의 참조를 가져오기
@@ -76,7 +47,6 @@ public class Gun : MonoBehaviourPun, IPunObservable {
         bulletLineRenderer.enabled = false;
     }
 
-
     private void OnEnable() {
         // 현재 탄창을 가득채우기
         magAmmo = magCapacity;
@@ -85,7 +55,6 @@ public class Gun : MonoBehaviourPun, IPunObservable {
         // 마지막으로 총을 쏜 시점을 초기화
         lastFireTime = 0;
     }
-
 
     // 발사 시도
     public void Fire() {
@@ -101,22 +70,8 @@ public class Gun : MonoBehaviourPun, IPunObservable {
         }
     }
 
+    // 실제 발사 처리
     private void Shot() {
-        // 실제 발사 처리는 호스트에게 대리
-        photonView.RPC("ShotProcessOnServer", RpcTarget.MasterClient);
-
-        // 남은 탄환의 수를 -1
-        magAmmo--;
-        if (magAmmo <= 0)
-        {
-            // 탄창에 남은 탄약이 없다면, 총의 현재 상태를 Empty으로 갱신
-            state = State.Empty;
-        }
-    }
-
-    // 호스트에서 실행되는, 실제 발사 처리
-    [PunRPC]
-    private void ShotProcessOnServer() {
         // 레이캐스트에 의한 충돌 정보를 저장하는 컨테이너
         RaycastHit hit;
         // 총알이 맞은 곳을 저장할 변수
@@ -150,14 +105,16 @@ public class Gun : MonoBehaviourPun, IPunObservable {
                           fireTransform.forward * fireDistance;
         }
 
-        // 발사 이펙트 재생, 이펙트 재생은 모든 클라이언트들에서 실행
-        photonView.RPC("ShotEffectProcessOnClients", RpcTarget.All, hitPosition);
-    }
-
-    // 이펙트 재생 코루틴을 랩핑하는 메서드
-    [PunRPC]
-    private void ShotEffectProcessOnClients(Vector3 hitPosition) {
+        // 발사 이펙트 재생 시작
         StartCoroutine(ShotEffect(hitPosition));
+
+        // 남은 탄환의 수를 -1
+        magAmmo--;
+        if (magAmmo <= 0)
+        {
+            // 탄창에 남은 탄약이 없다면, 총의 현재 상태를 Empty으로 갱신
+            state = State.Empty;
+        }
     }
 
     // 발사 이펙트와 소리를 재생하고 총알 궤적을 그린다
@@ -194,7 +151,7 @@ public class Gun : MonoBehaviourPun, IPunObservable {
             return false;
         }
 
-        // 재장전 처리 실행
+        // 재장전 처리 시작
         StartCoroutine(ReloadRoutine());
         return true;
     }
