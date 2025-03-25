@@ -2,6 +2,7 @@
 using UnityEngine;
 
 public class ColorSerialization {
+    [System.Obsolete]
     public static byte[] SerializeColor(object targetObject) {
         Color color = (Color) targetObject;
 
@@ -11,6 +12,7 @@ public class ColorSerialization {
         return bytes;
     }
 
+    [System.Obsolete]
     public static object DeserializeColor(byte[] bytes) {
         Quaternion quaterinon = (Quaternion) Protocol.Deserialize(bytes);
 

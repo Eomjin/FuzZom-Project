@@ -1,10 +1,11 @@
 ﻿using System.Collections;
+using Photon.Pun;
 using UnityEngine;
 using UnityEngine.AI; // AI, 내비게이션 시스템 관련 코드를 가져오기
 
 // 적 AI를 구현한다
 public class Enemy : LivingEntity {
-    public LayerMask whatIsTarget; // 추적 대상 레이어
+    public LayerMask whatIsTarget; // 공격 대상 레이어
 
     private LivingEntity targetEntity; // 추적할 대상
     private NavMeshAgent pathFinder; // 경로계산 AI 에이전트
@@ -20,6 +21,10 @@ public class Enemy : LivingEntity {
     public float damage = 20f; // 공격력
     public float timeBetAttack = 0.5f; // 공격 간격
     private float lastAttackTime; // 마지막 공격 시점
+
+    private FuzzyLogic FuzzyLogic;
+    private FuzzyLogic.FuzzyVariable distanceVariable;
+    private FuzzyLogic.FuzzyVariable speedVariable;
 
     // 추적할 대상이 존재하는지 알려주는 프로퍼티
     private bool hasTarget
@@ -46,9 +51,25 @@ public class Enemy : LivingEntity {
         // 렌더러 컴포넌트는 자식 게임 오브젝트에게 있으므로
         // GetComponentInChildren() 메서드를 사용
         enemyRenderer = GetComponentInChildren<Renderer>();
+
+        InitializeFuzzyLogic();
+    }
+
+    private void InitializeFuzzyLogic()
+    {
+        FuzzyLogic = new FuzzyLogic();
+
+        distanceVariable = FuzzyLogic.AddVariable("Distance");
+        distanceVariable.AddSet("Near", new FuzzyLogic.FuzzySet(0, 10, x => Mathf.Max(0, 1 - x / 10)));
+        distanceVariable.AddSet("Far", new FuzzyLogic.FuzzySet(10, 20, x => Mathf.Max(0, (x - 10) / 10)));
+
+        speedVariable = FuzzyLogic.AddVariable("Speed");
+        speedVariable.AddSet("Slow", new FuzzyLogic.FuzzySet(0.5f, 1.5f, x => Mathf.Max(0, 1 - (x - 0.5f) / 1)));
+        speedVariable.AddSet("Fast", new FuzzyLogic.FuzzySet(1.5f, 3f, x => Mathf.Max(0, (x - 1.5f) / 1.5f)));
     }
 
     // 적 AI의 초기 스펙을 결정하는 셋업 메서드
+    [PunRPC]
     public void Setup(float newHealth, float newDamage,
         float newSpeed, Color skinColor) {
         // 체력 설정
@@ -63,11 +84,24 @@ public class Enemy : LivingEntity {
     }
 
     private void Start() {
+        // 호스트가 아니라면 AI의 추적 루틴을 실행하지 않음
+        if (!PhotonNetwork.IsMasterClient)
+        {
+            return;
+        }
+
         // 게임 오브젝트 활성화와 동시에 AI의 추적 루틴 시작
         StartCoroutine(UpdatePath());
     }
 
     private void Update() {
+        // 호스트가 아니라면 애니메이션의 파라미터를 직접 갱신하지 않음
+        // 호스트가 파라미터를 갱신하면 클라이언트들에게 자동으로 전달되기 때문.
+        if (!PhotonNetwork.IsMasterClient)
+        {
+            return;
+        }
+
         // 추적 대상의 존재 여부에 따라 다른 애니메이션을 재생
         enemyAnimator.SetBool("HasTarget", hasTarget);
     }
@@ -81,8 +115,16 @@ public class Enemy : LivingEntity {
             {
                 // 추적 대상 존재 : 경로를 갱신하고 AI 이동을 계속 진행
                 pathFinder.isStopped = false;
-                pathFinder.SetDestination(
-                    targetEntity.transform.position);
+                pathFinder.SetDestination(targetEntity.transform.position);
+
+                float distanceToTarget = Vector3.Distance(transform.position, targetEntity.transform.position);
+                float nearMembership = distanceVariable.Fuzzify("Near", distanceToTarget);
+                float farMembership = distanceVariable.Fuzzify("Far", distanceToTarget);
+
+                float slowSpeed = speedVariable.Defuzzify("Slow", nearMembership);
+                float fastSpeed = speedVariable.Defuzzify("Fast", farMembership);
+
+                pathFinder.speed = slowSpeed + fastSpeed;
             }
             else
             {
@@ -90,11 +132,11 @@ public class Enemy : LivingEntity {
                 pathFinder.isStopped = true;
 
                 // 20 유닛의 반지름을 가진 가상의 구를 그렸을때, 구와 겹치는 모든 콜라이더를 가져옴
-                // 단, whatIsTarget 레이어를 가진 콜라이더만 가져오도록 필터링
+                // 단, targetLayers에 해당하는 레이어를 가진 콜라이더만 가져오도록 필터링
                 Collider[] colliders =
                     Physics.OverlapSphere(transform.position, 20f, whatIsTarget);
 
-                // 모든 콜라이더들을 순회하면서, 살아있는 LivingEntity 찾기
+                // 모든 콜라이더들을 순회하면서, 살아있는 플레이어를 찾기
                 for (int i = 0; i < colliders.Length; i++)
                 {
                     // 콜라이더로부터 LivingEntity 컴포넌트 가져오기
@@ -117,16 +159,16 @@ public class Enemy : LivingEntity {
         }
     }
 
+
     // 데미지를 입었을때 실행할 처리
-    public override void OnDamage(float damage,
-        Vector3 hitPoint, Vector3 hitNormal) {
+    [PunRPC]
+    public override void OnDamage(float damage, Vector3 hitPoint, Vector3 hitNormal) {
         // 아직 사망하지 않은 경우에만 피격 효과 재생
         if (!dead)
         {
             // 공격 받은 지점과 방향으로 파티클 효과를 재생
             hitEffect.transform.position = hitPoint;
-            hitEffect.transform.rotation
-                = Quaternion.LookRotation(hitNormal);
+            hitEffect.transform.rotation = Quaternion.LookRotation(hitNormal);
             hitEffect.Play();
 
             // 피격 효과음 재생
@@ -155,11 +197,18 @@ public class Enemy : LivingEntity {
 
         // 사망 애니메이션 재생
         enemyAnimator.SetTrigger("Die");
+
         // 사망 효과음 재생
         enemyAudioPlayer.PlayOneShot(deathSound);
     }
 
     private void OnTriggerStay(Collider other) {
+        // 호스트가 아니라면 공격 실행 불가
+        if (!PhotonNetwork.IsMasterClient)
+        {
+            return;
+        }
+
         // 자신이 사망하지 않았으며,
         // 최근 공격 시점에서 timeBetAttack 이상 시간이 지났다면 공격 가능
         if (!dead && Time.time >= lastAttackTime + timeBetAttack)
@@ -175,10 +224,8 @@ public class Enemy : LivingEntity {
                 lastAttackTime = Time.time;
 
                 // 상대방의 피격 위치와 피격 방향을 근삿값으로 계산
-                Vector3 hitPoint
-                    = other.ClosestPoint(transform.position);
-                Vector3 hitNormal
-                    = transform.position - other.transform.position;
+                Vector3 hitPoint = other.ClosestPoint(transform.position);
+                Vector3 hitNormal = transform.position - other.transform.position;
 
                 // 공격 실행
                 attackTarget.OnDamage(damage, hitPoint, hitNormal);
